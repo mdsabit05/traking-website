@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Hierarchical Study Progress Tracker</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root{
+      --accent:#2d89ef;
+      --muted:#f4f6f9;
+    }
+    body { font-family: "Segoe UI", Roboto, Arial; margin:20px; background:var(--muted); color:#222; }
+    h1 { text-align:center; margin-bottom:12px; }
+    .top-controls{ display:flex; gap:10px; justify-content:center; margin-bottom:12px; flex-wrap:wrap;}
+    button.btn{ background:var(--accent); color:white; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; }
+    button.ghost{ background:#fff; border:1px solid #ddd; color:#333; }
+    .layout{ display:grid; grid-template-columns:1fr; gap:18px; max-width:1200px; margin:0 auto; }
+    table{ width:100%; border-collapse:collapse; background:#fff; box-shadow:0 6px 18px rgba(0,0,0,0.06); border-radius:8px; overflow:hidden;}
+    th,td{ padding:10px; text-align:center; border-bottom:1px solid #eee; font-size:14px;}
+    th{ background: #123C7A; color:#fff; font-weight:600; }
+    td[contenteditable="true"]{ background:#fffdf5; cursor:text; }
+    .indent{ padding-left:22px; text-align:left; }
+    .controls-inline{ display:flex; gap:6px; justify-content:center; flex-wrap:wrap; }
+    .small{ padding:6px 8px; font-size:13px; border-radius:6px; }
+    .delete-btn{ background:transparent; color:#d31f1f; border:none; padding:6px 8px; border-radius:6px; cursor:pointer; }
+    .add-sub{ background:transparent; color:#fff; border:none; padding:6px 8px; border-radius:6px; cursor:pointer; }
+    .status{ padding:6px 10px; border-radius:8px; color:#fff; font-weight:600; display:inline-block; min-width:100px;}
+    .not-started{ background:#e74c3c; }
+    .in-progress{ background:#f1c40f; color:#222; }
+    .completed{ background:#2ecc71; }
+    .charts{ display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:18px; align-items:start; }
+    .chart-card{ background:#fff; padding:14px; border-radius:10px; box-shadow:0 8px 20px rgba(0,0,0,0.06); position:relative; min-height:300px;}
+    .chart-header{ display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:8px; }
+    canvas{ width:100% !important; height:260px !important; }
+    .collapse-btn{ background:#fff; border:1px solid #ddd; padding:6px 8px; border-radius:6px; cursor:pointer;}
+    .meta{ font-size:13px; color:#666; }
+    input[type="date"], input[type="number"] { font-size:14px; padding:5px; border-radius:4px; border:1px solid #ddd; }
+    .main-title[contenteditable="true"]{ display:inline-block; min-width:140px; text-align:left; }
+    @media (max-width:700px){ canvas{height:220px!important;} th,td{font-size:13px;} }
+  </style>
+</head>
+<body>
+  <h1>📚 Hierarchical Study Progress Tracker</h1>
+
+  <div class="top-controls">
+    <button class="btn" onclick="addMainGoal()">➕ Add Main Goal</button>
+    <button class="ghost small" onclick="expandAll()">Expand All</button>
+    <button class="ghost small" onclick="collapseAll()">Collapse All</button>
+  </div>
+
+  <div class="layout">
+    <!-- Table -->
+    <table id="progressTable">
+      <thead>
+        <tr>
+          <th style="width:26%">Goal / Subtopic</th>
+          <th style="width:11%">Start Date</th>
+          <th style="width:11%">Due Date</th>
+          <th style="width:11%">Target Pages</th>
+          <th style="width:11%">Completed Pages</th>
+          <th style="width:9%">Progress</th>
+          <th style="width:11%">Status</th>
+          <th style="width:10%">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <!-- rows inserted here -->
+      </tbody>
+    </table>
+
+    <!-- Charts -->
+    <div class="charts">
+      <div class="chart-card">
+        <div class="chart-header">
+          <div><strong>Overall Progress by Main Goal</strong><div class="meta">Main goals show weighted progress from their subtopics</div></div>
+          <div>
+            <button class="small ghost" onclick="switchChartType('overall','bar')">Bar</button>
+            <button class="small ghost" onclick="switchChartType('overall','pie')">Pie</button>
+          </div>
+        </div>
+        <canvas id="overallChart"></canvas>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-header">
+          <div><strong>Weekly Progress</strong><div class="meta">Shows Main Goals & Subtopics due this week</div></div>
+          <div>
+            <button class="small ghost" onclick="switchChartType('weekly','bar')">Bar</button>
+            <button class="small ghost" onclick="switchChartType('weekly','pie')">Pie</button>
+          </div>
+        </div>
+        <canvas id="weeklyChart"></canvas>
+      </div>
+
+      <div class="chart-card" style="grid-column: 1 / -1;">
+        <div class="chart-header">
+          <div><strong>Monthly Progress</strong><div class="meta">Shows Main Goals & Subtopics due this month</div></div>
+          <div>
+            <button class="small ghost" onclick="switchChartType('monthly','bar')">Bar</button>
+            <button class="small ghost" onclick="switchChartType('monthly','pie')">Pie</button>
+          </div>
+        </div>
+        <canvas id="monthlyChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ---------- utilities ---------- */
+function uid(prefix='id'){ return prefix + '_' + Math.random().toString(36).slice(2,9); }
+function isoToday(){ return new Date().toISOString().split('T')[0]; }
+function safeNum(v){ v = parseFloat(v); return isNaN(v) ? 0 : v; }
+function startOfWeek(date){ const d = new Date(date); const day = (d.getDay() + 6) % 7; d.setDate(d.getDate() - day); d.setHours(0,0,0,0); return d; }
+function endOfWeek(date){ const s = startOfWeek(date); s.setDate(s.getDate() + 6); s.setHours(23,59,59,999); return s; }
+function startOfMonth(date){ const d = new Date(date); d.setDate(1); d.setHours(0,0,0,0); return d; }
+function endOfMonth(date){ const d = new Date(date); d.setMonth(d.getMonth()+1,0); d.setHours(23,59,59,999); return d; }
+
+/* ---------- DOM helpers ---------- */
+const tbody = document.querySelector('#progressTable tbody');
+
+function escapeHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function createMainRow(mainId, title='New Main Goal', start=isoToday(), due=isoToday()){
+  const tr = document.createElement('tr');
+  tr.dataset.type = 'main';
+  tr.dataset.id = mainId;
+  tr.dataset.expanded = 'true';
+
+  tr.innerHTML = `
+    <td style="text-align:left"><strong class="main-title" contenteditable="true">${escapeHtml(title)}</strong></td>
+    <td><input type="date" class="date-input" value="${start}"></td>
+    <td><input type="date" class="date-input" value="${due}"></td>
+    <td class="main-target">0</td>
+    <td class="main-completed">0</td>
+    <td class="progressCell">0%</td>
+    <td class="statusCell"><span class="status not-started">Not Started</span></td>
+    <td class="controls">
+      <div style="display:flex;gap:6px;justify-content:center">
+        <button class="add-sub small" onclick="addSubtopic('${mainId}', this)">➕ Sub</button>
+        <button class="collapse-btn small" onclick="toggleSub('${mainId}', this)">▾</button>
+        <button class="delete-btn" onclick="deleteRow(this)">❌</button>
+      </div>
+    </td>
+  `;
+  return tr;
+}
+
+function createSubRow(mainId, subId, title='New Subtopic', start=isoToday(), due=isoToday(), target=0, completed=0){
+  const tr = document.createElement('tr');
+  tr.dataset.type = 'sub';
+  tr.dataset.parent = mainId;
+  tr.dataset.id = subId;
+
+  tr.innerHTML = `
+    <td class="indent" style="text-align:left"><span class="sub-title" contenteditable="true">${escapeHtml(title)}</span></td>
+    <td><input type="date" class="date-input" value="${start}"></td>
+    <td><input type="date" class="date-input" value="${due}"></td>
+    <td><input class="target-input" type="number" min="0" value="${target}"></td>
+    <td><input class="completed-input" type="number" min="0" value="${completed}"></td>
+    <td class="progressCell">0%</td>
+    <td class="statusCell"><span class="status not-started">Not Started</span></td>
+    <td class="controls"><button class="delete-btn" onclick="deleteRow(this)">❌</button></td>
+  `;
+  return tr;
+}
+
+/* ---------- initial example data ---------- */
+(function seed(){
+  const m1 = uid('M');
+  tbody.appendChild(createMainRow(m1,'Biology NCERT','2025-09-15','2025-09-20'));
+  tbody.appendChild(createSubRow(m1, uid('S'), 'Cells - Structure', '2025-09-15','2025-09-16', 80, 20));
+  tbody.appendChild(createSubRow(m1, uid('S'), 'Plant Kingdom', '2025-09-16','2025-09-18', 120, 30));
+
+  const m2 = uid('M');
+  tbody.appendChild(createMainRow(m2,'Physics Notes','2025-09-16','2025-09-25'));
+  tbody.appendChild(createSubRow(m2, uid('S'),'Mechanics', '2025-09-17','2025-09-20',150,50));
+  tbody.appendChild(createSubRow(m2, uid('S'),'Thermodynamics', '2025-09-21','2025-09-24',0,0));
+
+  const m3 = uid('M');
+  tbody.appendChild(createMainRow(m3,'Chemistry Practice','2025-09-18','2025-09-30'));
+  tbody.appendChild(createSubRow(m3, uid('S'),'Organic Basics', '2025-09-18','2025-09-22',300,10));
+})();
+
+/* ---------- core logic ---------- */
+function addMainGoal(){
+  const id = uid('M');
+  const tr = createMainRow(id, 'New Main Goal', isoToday(), isoToday());
+  tbody.appendChild(tr);
+  updateAll();
+  scrollInto(tr);
+}
+
+function addSubtopic(mainId, btn){
+  const trList = Array.from(tbody.querySelectorAll('tr'));
+  let insertIndex = trList.findIndex(r => r.dataset.type==='main' && r.dataset.id===mainId);
+  if (insertIndex === -1) return;
+  // find last child index
+  for (let i = insertIndex+1; i < trList.length; i++){
+    if (trList[i].dataset.type === 'main') break;
+    insertIndex = i;
+  }
+  const subId = uid('S');
+  const newSub = createSubRow(mainId, subId, 'New Subtopic', isoToday(), isoToday(), 0, 0);
+  const ref = trList[insertIndex] ? trList[insertIndex].nextSibling : null;
+  tbody.insertBefore(newSub, ref);
+  updateAll();
+  setTimeout(()=> {
+    const titleCell = tbody.querySelector(`tr[data-id="${subId}"] .sub-title`);
+    if (titleCell) { titleCell.focus(); selectElementText(titleCell); }
+  },50);
+}
+
+function deleteRow(btn){
+  const row = btn.closest('tr');
+  if (!row) return;
+  if (row.dataset.type === 'main'){
+    const mid = row.dataset.id;
+    // remove subtopics belonging to this main
+    Array.from(tbody.querySelectorAll(`tr[data-parent="${mid}"]`)).forEach(s => s.remove());
+  }
+  row.remove();
+  updateAll();
+}
+
+function toggleSub(mainId, btn){
+  const mainRow = tbody.querySelector(`tr[data-type="main"][data-id="${mainId}"]`);
+  if (!mainRow) return;
+  const expanded = mainRow.dataset.expanded === 'true';
+  mainRow.dataset.expanded = expanded ? 'false' : 'true';
+  btn.textContent = expanded ? '▸' : '▾';
+  const subs = Array.from(tbody.querySelectorAll(`tr[data-parent="${mainId}"]`));
+  subs.forEach(s => s.style.display = expanded ? 'none' : '');
+}
+
+function expandAll(){
+  tbody.querySelectorAll('tr[data-type="main"]').forEach(m => {
+    m.dataset.expanded='true';
+    const id=m.dataset.id; const btn = m.querySelector('.collapse-btn'); if(btn) btn.textContent='▾';
+    tbody.querySelectorAll(`tr[data-parent="${id}"]`).forEach(s=> s.style.display='');
+  });
+}
+function collapseAll(){
+  tbody.querySelectorAll('tr[data-type="main"]').forEach(m => {
+    m.dataset.expanded='false';
+    const id=m.dataset.id; const btn = m.querySelector('.collapse-btn'); if(btn) btn.textContent='▸';
+    tbody.querySelectorAll(`tr[data-parent="${id}"]`).forEach(s=> s.style.display='none');
+  });
+}
+
+function selectElementText(el){
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+/* calculate progress per sub / main */
+function computeProgressForSub(row){
+  // read numeric values from inputs
+  const targetInput = row.querySelector('.target-input');
+  const completedInput = row.querySelector('.completed-input');
+  const target = safeNum(targetInput ? targetInput.value : row.cells[3].innerText);
+  const completed = safeNum(completedInput ? completedInput.value : row.cells[4].innerText);
+  const progress = target > 0 ? (completed/target)*100 : (completed>0 ? 100 : 0);
+  row.querySelector('.progressCell').innerText = Math.round(progress) + '%';
+  const statusSpan = row.querySelector('.statusCell .status');
+  if (progress === 0) { statusSpan.className='status not-started'; statusSpan.innerText='Not Started'; }
+  else if (progress >= 100) { statusSpan.className='status completed'; statusSpan.innerText='Completed'; }
+  else { statusSpan.className='status in-progress'; statusSpan.innerText='In Progress'; }
+  return {target, completed, progress};
+}
+
+function computeProgressForMain(row){
+  const mainId = row.dataset.id;
+  const subs = Array.from(tbody.querySelectorAll(`tr[data-parent="${mainId}"]`));
+  if (subs.length === 0){
+    // no subs -> read own cells (if user edited them manually)
+    const t = safeNum(row.cells[3].innerText);
+    const c = safeNum(row.cells[4].innerText);
+    const prog = t>0 ? (c/t)*100 : (c>0 ? 100 : 0);
+    row.querySelector('.progressCell').innerText = Math.round(prog) + '%';
+    const statusSpan = row.querySelector('.statusCell .status');
+    if (prog === 0) { statusSpan.className='status not-started'; statusSpan.innerText='Not Started'; }
+    else if (prog >= 100) { statusSpan.className='status completed'; statusSpan.innerText='Completed'; }
+    else { statusSpan.className='status in-progress'; statusSpan.innerText='In Progress'; }
+    return {target: t, completed: c, progress: prog};
+  }
+  // sum subtargets and subcompleted
+  let totalTarget = 0, totalCompleted = 0;
+  subs.forEach(s => {
+    // ensure latest values from sub (they use inputs)
+    const t = safeNum(s.querySelector('.target-input') ? s.querySelector('.target-input').value : s.cells[3].innerText);
+    const c = safeNum(s.querySelector('.completed-input') ? s.querySelector('.completed-input').value : s.cells[4].innerText);
+    totalTarget += t;
+    totalCompleted += c;
+  });
+  const prog = totalTarget > 0 ? (totalCompleted/totalTarget)*100 : (totalCompleted>0 ? 100 : 0);
+  // set main target/completed (non-editable text)
+  row.cells[3].innerText = Math.round(totalTarget);
+  row.cells[4].innerText = Math.round(totalCompleted);
+  row.querySelector('.progressCell').innerText = Math.round(prog) + '%';
+  const statusSpan = row.querySelector('.statusCell .status');
+  if (prog === 0) { statusSpan.className='status not-started'; statusSpan.innerText='Not Started'; }
+  else if (prog >= 100) { statusSpan.className='status completed'; statusSpan.innerText='Completed'; }
+  else { statusSpan.className='status in-progress'; statusSpan.innerText='In Progress'; }
+  return { target: totalTarget, completed: totalCompleted, progress: prog };
+}
+
+/* update all rows and charts */
+function updateAll(){
+  // compute sub rows first
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+  rows.forEach(r=>{
+    if (r.dataset.type === 'sub') computeProgressForSub(r);
+  });
+  // then mains
+  rows.forEach(r=>{
+    if (r.dataset.type === 'main') computeProgressForMain(r);
+  });
+
+  updateCharts();
+}
+
+/* ---------- Chart logic (keeps original behavior) ---------- */
+const overallCtx = document.getElementById('overallChart').getContext('2d');
+const weeklyCtx  = document.getElementById('weeklyChart').getContext('2d');
+const monthlyCtx = document.getElementById('monthlyChart').getContext('2d');
+
+let overallChart = new Chart(overallCtx, { type:'bar', data:{labels:[], datasets:[{label:'Progress %', data:[], backgroundColor:[]}] }, options: chartOptions('Goals Progress')});
+let weeklyChart  = new Chart(weeklyCtx,  { type:'bar', data:{labels:[], datasets:[{label:'Progress %', data:[], backgroundColor:[]}] }, options: chartOptions('Weekly Progress')});
+let monthlyChart = new Chart(monthlyCtx, { type:'bar', data:{labels:[], datasets:[{label:'Progress %', data:[], backgroundColor:[]}] }, options: chartOptions('Monthly Progress')});
+
+function chartOptions(title){
+  return {
+    responsive:true, maintainAspectRatio:false,
+    plugins:{ title:{ display:true, text:title, font:{size:16} }, legend:{position:'bottom'} },
+    scales:{ y:{ beginAtZero:true, max:100, ticks:{callback: v => v + '%'} } }
+  };
+}
+
+function palette(n){
+  const base = ['#2d89ef','#9b59b6','#2ecc71','#f1c40f','#e67e22','#e74c3c','#17a2b8','#5f6caf','#a3d39c'];
+  const out=[];
+  for(let i=0;i<n;i++) out.push(base[i % base.length]);
+  return out;
+}
+
+function updateCharts(){
+  // OVERALL: list mains (one bar per main) with their computed progress
+  const mainRows = Array.from(tbody.querySelectorAll('tr[data-type="main"]'));
+  const overallLabels = [];
+  const overallData = [];
+  mainRows.forEach(m => {
+    const stats = computeProgressForMain(m); // ensure up-to-date
+    overallLabels.push(m.querySelector('.main-title') ? m.querySelector('.main-title').innerText : m.cells[0].innerText.trim());
+    overallData.push(Math.round(stats.progress));
+  });
+  overallChart.data.labels = overallLabels;
+  overallChart.data.datasets[0].data = overallData;
+  overallChart.data.datasets[0].backgroundColor = palette(overallLabels.length);
+  overallChart.update();
+
+  // WEEKLY: include subtopics whose due date falls in current week and mains that have any sub in that week
+  const now = new Date();
+  const weekStart = startOfWeek(now);
+  const weekEnd = endOfWeek(now);
+  const weeklyLabels = [];
+  const weeklyData = [];
+
+  const subRows = Array.from(tbody.querySelectorAll('tr[data-type="sub"]'));
+  const subsInWeek = subRows.filter(s => {
+    const dateInput = s.querySelector('.date-input');
+    const d = new Date(dateInput ? dateInput.value : s.cells[2].innerText);
+    return !isNaN(d) && d >= weekStart && d <= weekEnd;
+  });
+
+  const mainsIncluded = new Set();
+  subsInWeek.forEach(s => {
+    const parent = s.dataset.parent;
+    mainsIncluded.add(parent);
+    const title = s.querySelector('.sub-title') ? s.querySelector('.sub-title').innerText.trim() : s.cells[0].innerText.trim();
+    const stats = computeProgressForSub(s);
+    weeklyLabels.push(title);
+    weeklyData.push(Math.round(stats.progress));
+  });
+
+  mainsIncluded.forEach(mId => {
+    const mainRow = tbody.querySelector(`tr[data-type="main"][data-id="${mId}"]`);
+    if (mainRow){
+      const subs = Array.from(tbody.querySelectorAll(`tr[data-parent="${mId}"]`)).filter(s => {
+        const d = new Date((s.querySelector('.date-input') ? s.querySelector('.date-input').value : s.cells[2].innerText));
+        return !isNaN(d) && d >= weekStart && d <= weekEnd;
+      });
+      let totalT=0, totalC=0;
+      subs.forEach(s=> { totalT += safeNum(s.querySelector('.target-input').value); totalC += safeNum(s.querySelector('.completed-input').value); });
+      const prog = totalT>0 ? (totalC/totalT)*100 : (totalC>0 ? 100 : 0);
+      weeklyLabels.push(mainRow.querySelector('.main-title').innerText.trim() + ' (main)');
+      weeklyData.push(Math.round(prog));
+    }
+  });
+
+  weeklyChart.data.labels = weeklyLabels;
+  weeklyChart.data.datasets[0].data = weeklyData;
+  weeklyChart.data.datasets[0].backgroundColor = palette(weeklyLabels.length);
+  weeklyChart.update();
+
+  // MONTHLY
+  const monthStart = startOfMonth(now), monthEnd = endOfMonth(now);
+  const monthlyLabels = [], monthlyData = [];
+  const subsInMonth = subRows.filter(s => {
+    const d = new Date((s.querySelector('.date-input') ? s.querySelector('.date-input').value : s.cells[2].innerText));
+    return !isNaN(d) && d >= monthStart && d <= monthEnd;
+  });
+  const mainsIncMonth = new Set();
+  subsInMonth.forEach(s => {
+    mainsIncMonth.add(s.dataset.parent);
+    monthlyLabels.push(s.querySelector('.sub-title') ? s.querySelector('.sub-title').innerText.trim() : s.cells[0].innerText.trim());
+    monthlyData.push(Math.round(computeProgressForSub(s).progress));
+  });
+  mainsIncMonth.forEach(mId => {
+    const m = tbody.querySelector(`tr[data-type="main"][data-id="${mId}"]`);
+    if (!m) return;
+    const subs = Array.from(tbody.querySelectorAll(`tr[data-parent="${mId}"]`)).filter(s => {
+      const d = new Date((s.querySelector('.date-input') ? s.querySelector('.date-input').value : s.cells[2].innerText));
+      return !isNaN(d) && d >= monthStart && d <= monthEnd;
+    });
+    let totalT=0, totalC=0;
+    subs.forEach(s=> { totalT += safeNum(s.querySelector('.target-input').value); totalC += safeNum(s.querySelector('.completed-input').value); });
+    const prog = totalT>0 ? (totalC/totalT)*100 : (totalC>0 ? 100 : 0);
+    monthlyLabels.push(m.querySelector('.main-title').innerText.trim() + ' (main)');
+    monthlyData.push(Math.round(prog));
+  });
+
+  monthlyChart.data.labels = monthlyLabels;
+  monthlyChart.data.datasets[0].data = monthlyData;
+  monthlyChart.data.datasets[0].backgroundColor = palette(monthlyLabels.length);
+  monthlyChart.update();
+}
+
+/* switch chart type for given chartName: 'overall','weekly','monthly' */
+function switchChartType(which,type){
+  let obj = (which === 'overall') ? overallChart : (which==='weekly'? weeklyChart: monthlyChart);
+  const ctx = (which === 'overall') ? overallCtx : (which==='weekly'? weeklyCtx: monthlyCtx);
+  const data = obj.data;
+  obj.destroy();
+  const newChart = new Chart(ctx, {
+    type: type,
+    data: data,
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      plugins:{ title:{ display:true, text: which === 'overall' ? 'Goals Progress' : which==='weekly' ? 'Weekly Progress' : 'Monthly Progress', font:{size:16} }, legend:{position:'bottom'} },
+      scales: type === 'bar' ? { y:{ beginAtZero:true, max:100, ticks:{callback: v => v + '%'} } } : {}
+    }
+  });
+  if (which==='overall') overallChart = newChart;
+  else if (which==='weekly') weeklyChart = newChart;
+  else monthlyChart = newChart;
+}
+
+/* ---------- interactivity: live update when user edits table ---------- */
+tbody.addEventListener('input', function(e){
+  // handle changes in input fields and contenteditable
+  updateAll();
+});
+tbody.addEventListener('change', function(e){
+  updateAll();
+});
+tbody.addEventListener('keydown', function(e){
+  // prevent Enter in contenteditable creating newline
+  if (e.key === 'Enter'){ e.preventDefault(); }
+});
+
+/* helpers */
+function scrollInto(el){ el.scrollIntoView({behavior:'smooth', block:'center'}); }
+
+/* init - ensure computed initial values and charts */
+updateAll();
+
+/* expose some functions to global scope for onclick handlers */
+window.addMainGoal = addMainGoal;
+window.addSubtopic = addSubtopic;
+window.deleteRow = deleteRow;
+window.toggleSub = toggleSub;
+window.expandAll = expandAll;
+window.collapseAll = collapseAll;
+window.switchChartType = switchChartType;
+</script>
+</body>
+</html>
